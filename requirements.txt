@@ -1,0 +1,30 @@
+# Core data processing
+numpy>=1.21.0
+pandas>=1.3.0
+
+# Visualization
+matplotlib>=3.4.0
+seaborn>=0.11.0
+
+# Technical indicators
+ta-lib>=0.4.0  # Optional: requires separate installation
+TA-Lib>=0.4.0  # Python wrapper
+
+# Jupyter for research
+jupyter>=1.0.0
+notebook>=6.4.0
+
+# Statistical analysis
+scipy>=1.7.0
+statsmodels>=0.13.0
+
+# Backtesting (optional, for local testing)
+backtrader>=1.9.0
+
+# Data fetching (optional)
+yfinance>=0.1.70
+tushare>=1.2.0
+
+# Utils
+python-dateutil>=2.8.0
+pytz>=2021.1
