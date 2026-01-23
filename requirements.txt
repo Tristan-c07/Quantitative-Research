@@ -7,8 +7,10 @@ matplotlib>=3.4.0
 seaborn>=0.11.0
 
 # Technical indicators
-ta-lib>=0.4.0  # Optional: requires separate installation
-TA-Lib>=0.4.0  # Python wrapper
+# Note: TA-Lib requires system library installation first
+# Ubuntu/Debian: sudo apt-get install ta-lib
+# macOS: brew install ta-lib
+TA-Lib>=0.4.0  # Python wrapper for TA-Lib
 
 # Jupyter for research
 jupyter>=1.0.0

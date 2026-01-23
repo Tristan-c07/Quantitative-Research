@@ -52,9 +52,14 @@ def load_from_tushare(stock_code, start_date, end_date):
     """
     try:
         import tushare as ts
+        import os
         
         # 设置token（需要在tushare官网注册获取）
-        # ts.set_token('YOUR_TOKEN_HERE')
+        # 推荐使用环境变量: export TUSHARE_TOKEN='your_token'
+        token = os.getenv('TUSHARE_TOKEN')
+        if not token:
+            raise ValueError("Tushare token not found. Set TUSHARE_TOKEN environment variable.")
+        ts.set_token(token)
         pro = ts.pro_api()
         
         # 转换股票代码格式

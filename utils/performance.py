@@ -108,8 +108,8 @@ def calculate_max_drawdown(returns):
     # 计算历史最高点
     running_max = cumulative.expanding().max()
     
-    # 计算回撤
-    drawdown = (cumulative - running_max) / running_max
+    # 计算回撤（避免除以零）
+    drawdown = (cumulative - running_max) / running_max.where(running_max != 0, 1)
     
     # 找到最大回撤
     max_dd = drawdown.min()
@@ -142,8 +142,9 @@ def calculate_annual_return(returns, periods_per_year=252):
     if len(returns) == 0:
         return 0.0
     
-    # 计算总收益
-    total_return = (1 + returns).prod() - 1
+    # 计算总收益 (使用累计收益的最后一个值，数值更稳定)
+    cumulative = (1 + returns).cumprod()
+    total_return = cumulative.iloc[-1] - 1 if len(cumulative) > 0 else 0.0
     
     # 计算年化收益
     n_periods = len(returns)

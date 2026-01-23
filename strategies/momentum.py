@@ -136,7 +136,8 @@ def market_open(context):
             # 选择标准：正动量 + RSI在合理区间（避免超买）
             if momentum > 0 and g.rsi_lower < rsi < g.rsi_upper:
                 stock_scores[stock] = momentum
-        except:
+        except (ValueError, KeyError, AttributeError) as e:
+            log.warning(f"跳过 {stock}: {e}")
             continue
     
     # 按动量排序，选择前N只股票
