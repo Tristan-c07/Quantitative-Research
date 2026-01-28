@@ -18,7 +18,8 @@ def calculate_sharpe_ratio(returns: np.ndarray, risk_free_rate: float = 0.0) -> 
         float: Sharpe ratio
     """
     excess_returns = returns - risk_free_rate
-    return np.mean(excess_returns) / np.std(excess_returns) if np.std(excess_returns) != 0 else 0.0
+    std = float(np.std(excess_returns))
+    return float(np.mean(excess_returns)) / std if std != 0.0 else 0.0
 
 
 def calculate_max_drawdown(equity_curve: np.ndarray) -> float:
@@ -35,4 +36,4 @@ def calculate_max_drawdown(equity_curve: np.ndarray) -> float:
         return 0.0
     peak = np.maximum.accumulate(equity_curve)
     drawdown = (equity_curve - peak) / peak
-    return np.min(drawdown)
+    return float(np.min(drawdown))
