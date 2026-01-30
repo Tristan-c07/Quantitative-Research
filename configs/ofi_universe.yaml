@@ -1,0 +1,18 @@
+# ETF universe for OFI microstructure study
+# Selected based on QC:
+# - bad_ratio < 0.1%
+# - low relative spread
+# - stable order book (no crossed, low dup ts)
+
+universe:
+  - 511380.XSHG
+  - 510300.XSHG
+  - 518880.XSHG
+  - 159919.XSHE
+  - 159915.XSHE
+  - 510050.XSHG
+
+# Data quality filters (applied at day level)
+filters:
+  crossed_ratio_max: 0.001
+  dup_ts_ratio_max: 0.05
