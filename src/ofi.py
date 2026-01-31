@@ -1,43 +1,71 @@
-# src/ofi.py
-import pandas as pd
+from __future__ import annotations
 import numpy as np
+import pandas as pd
+from typing import List
 
-def compute_ofi_l1(df: pd.DataFrame) -> pd.Series:
+
+def _col(level: int, side: str, kind: str) -> str:
+    return f"{side}{level}_{kind}"
+
+
+def ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
+    
+    out = df.copy()
+    out["time"] = pd.to_datetime(out["time"], errors="coerce")
+    out = out.dropna(subset=["time"]).sort_values("time")
+    out = out.set_index("time")
+    return out
+
+
+def compute_ofi_per_tick(df: pd.DataFrame, levels: int = 5) -> pd.DataFrame:
     """
-    Compute Level-1 OFI for a single day order book DataFrame.
-    Assumes df is sorted by ts.
-    Returns a pd.Series aligned with df.index.
+    输出：添加列 ofi1..ofi{levels} 以及 ofi（sum）
     """
-    b_p = df["b1_p"]
-    b_v = df["b1_v"]
-    a_p = df["a1_p"]
-    a_v = df["a1_v"]
+    out = df.copy()
 
-    # shift
-    b_p_prev = b_p.shift(1)
-    b_v_prev = b_v.shift(1)
-    a_p_prev = a_p.shift(1)
-    a_v_prev = a_v.shift(1)
+    for i in range(1, levels + 1):
+        bp = out[_col(i, "b", "p")].astype(float)
+        ap = out[_col(i, "a", "p")].astype(float)
+        bv = out[_col(i, "b", "v")].astype(float)
+        av = out[_col(i, "a", "v")].astype(float)
 
-    # Bid contribution
-    bid = np.where(
-        b_p > b_p_prev, b_v,
-        np.where(
-            b_p < b_p_prev, -b_v_prev,
-            b_v - b_v_prev
+        bp_prev = bp.shift(1)
+        ap_prev = ap.shift(1)
+        bv_prev = bv.shift(1)
+        av_prev = av.shift(1)
+
+        # Δb_i
+        db = np.where(
+            bp > bp_prev, bv,
+            np.where(bp == bp_prev, bv - bv_prev, -bv_prev)
         )
-    )
 
-    # Ask contribution
-    ask = np.where(
-        a_p > a_p_prev, -a_v_prev,
-        np.where(
-            a_p < a_p_prev, a_v,
-            -(a_v - a_v_prev)
+        # Δa_i
+        da = np.where(
+            ap < ap_prev, av,
+            np.where(ap == ap_prev, av - av_prev, -av_prev)
         )
-    )
 
-    ofi = bid + ask
-    ofi[0] = 0.0  # 第一条没有前值
+        ofi_i = db - da
+        out[f"ofi{i}"] = ofi_i
 
-    return pd.Series(ofi, index=df.index, name="ofi_l1")
+    ofi_cols: List[str] = [f"ofi{i}" for i in range(1, levels + 1)]
+    out["ofi"] = out[ofi_cols].sum(axis=1, skipna=True)
+
+    # 第一行填 0.0
+    out[ofi_cols + ["ofi"]] = out[ofi_cols + ["ofi"]].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    return out
+
+
+def aggregate_to_minute(ofi_tick: pd.DataFrame, bar: str = "1min", agg: str = "sum") -> pd.DataFrame:
+    
+    cols = [c for c in ofi_tick.columns if c.startswith("ofi")]
+    if agg == "sum":
+        res = ofi_tick[cols].resample(bar).sum()
+    elif agg == "mean":
+        res = ofi_tick[cols].resample(bar).mean()
+    else:
+        raise ValueError(f"Unsupported agg={agg}")
+
+    res = res.dropna(how="all")
+    return res

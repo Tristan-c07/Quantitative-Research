@@ -45,11 +45,11 @@ def qc_one_parquet(pq: Path) -> dict:
     }
 
 def main():
-    processed_root = Path("data/processed/lob")
+    processed_root = Path("data/processed/ticks")
     out_file = Path("data/features/qc_all.parquet")
     out_file.parent.mkdir(parents=True, exist_ok=True)
 
-    parts = sorted(processed_root.glob("symbol=*/date=*/part.parquet"))
+    parts = sorted(processed_root.glob("*/*/part.parquet"))
     rows = []
     for i, pq in enumerate(parts, 1):
         try:

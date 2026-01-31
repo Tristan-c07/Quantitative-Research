@@ -7,16 +7,7 @@ from typing import List
 
 
 def get_trading_days(start_date: datetime, end_date: datetime) -> List[datetime]:
-    """
-    Get trading days between start and end date
     
-    Args:
-        start_date: Start date
-        end_date: End date
-        
-    Returns:
-        list: List of trading days
-    """
     # Placeholder implementation
     days = []
     current = start_date

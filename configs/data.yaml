@@ -1,8 +1,18 @@
-# Data Configuration
-# Configure data sources and parameters
+project:
+  timezone: "Asia/Shanghai"
 
 data:
-  # Data source settings
-  source: ""
-  frequency: ""
-  fields: []
+  processed_dir: "data/processed/ticks"
+  raw_dir: "data/raw/ticks"
+
+  universe_file: "configs/universe.yaml"  # 一列 symbol 或两列 symbol,name 都行
+  start: "2021-01-01"
+  end: "2025-12-31"
+
+feature:
+  ofi:
+    levels: 5
+    bar: "1min"          # 1min 聚合
+    agg: "sum"           # tick级 OFI 在分钟内求和
+    output_dir: "data/features/ofi_minute"
+    overwrite: false     # true 就强制重算覆盖

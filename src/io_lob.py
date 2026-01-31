@@ -109,7 +109,7 @@ def raw_path(root: Path, year: int, symbol: str, date_str: str) -> Path:
 
 
 def processed_path(root: Path, symbol: str, date_str: str) -> Path:
-    return root / "lob" / f"symbol={symbol}" / f"date={date_str}" / "part.parquet"
+    return root / "ticks" / symbol / date_str / "part.parquet"
 
 def convert_one_day(raw_file: Path, processed_root: Path) -> Path:
     # raw_file: .../raw_ticks/2021/159915.XSHE/2021-01-04.csv.gz

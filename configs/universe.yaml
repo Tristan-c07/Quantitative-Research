@@ -13,6 +13,7 @@ universe:
   - 510050.XSHG
 
 # Data quality filters (applied at day level)
-filters:
-  crossed_ratio_max: 0.001
-  dup_ts_ratio_max: 0.05
+
+#filters:
+#  crossed_ratio_max: 0.001
+#  dup_ts_ratio_max: 0.05
