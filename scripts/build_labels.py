@@ -24,7 +24,7 @@ def compute_minute_returns(df: pd.DataFrame) -> pd.Series:
         df['ts'] = pd.to_datetime(df['ts'])
     
     # 向下取整到分钟
-    df['minute'] = df['ts'].dt.floor('min')
+    df['minute'] = df['ts'].dt.floor('min') # type: ignore
     
     # 计算每分钟最后一笔的中间价
     close = (df.groupby('minute').last()['a1_p'] + 

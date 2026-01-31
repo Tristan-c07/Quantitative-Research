@@ -38,7 +38,7 @@ def check_minute_coverage(df: pd.DataFrame) -> Dict:
         return {'n_minutes': 0, 'expected': 240, 'coverage': 0.0}
     
     df['ts'] = pd.to_datetime(df['ts'])
-    df['minute'] = df['ts'].dt.floor('min')
+    df['minute'] = df['ts'].dt.floor('min') # type: ignore
     n_minutes = df['minute'].nunique()
     expected = 240  # A股连续竞价约240分钟
     coverage = n_minutes / expected
