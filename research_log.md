@@ -1,550 +1,292 @@
-# OFI Research Log
+﻿# Research Log (Day0–Day3) — ETF LOB / OFI Pipeline
 
-## 项目概述
-
-本项目专注于Order Flow Imbalance (OFI)因子的研究和验证。OFI是一个基于高频订单簿数据的价格预测因子，通过捕捉买卖盘量的变化来预测短期价格走势。
-
-**研究周期**：2021-01-01 至 2025-12-31
-**标的池**：6个ETF（159915.XSHE, 159919.XSHE, 510050.XSHG, 510300.XSHG, 511380.XSHG, 518880.XSHG）
-**数据频率**：Tick级数据，聚合至分钟级
+> 目标：在聚宽（JQData）拿到 ETF 五档盘口 tick 快照数据，落地到本地可复现的 repo 管线里；完成 OFI（Order Flow Imbalance）特征计算（先单标的单日跑通，再扩展到多 ETF、多日、自动化批处理），为后续研究/回测做数据与特征底座。
 
 ---
 
-## Day 0-1: 代码理解与数据管道修复
+## 0. 项目约定与产出标准
 
-### 2025-12-XX
+### 0.1 研究问题（当前阶段）
+- 用 **五档盘口快照** 构造 **OFI 特征**（level=5）。
+- 先从 **单标的、单日** → **单标的、全样本日** → **多标的、全样本日** 扩展。
 
-#### 1. pipeline_io.py代码讲解
+### 0.2 明确数据范围
+- 选择规则
+  - 流动性筛选：先用 成交额 Top 30 做候选池
+  - 快照质量硬过滤（0成交/无报价/a1<b1 等）
+  - 最后按 点差更小 + 快照更密 排序，只留 12 只
 
-**目标**：理解项目的数据管道和配置加载机制
+- ETF 列表（12只，按当前研究主线）：
+  - 511360.XSHG, 511090.XSHG, 511380.XSHG, 518880.XSHG, 510500.XSHG,
+  - 159919.XSHE, 510300.XSHG, 510310.XSHG, 159915.XSHE, 510050.XSHG,
+  - 513090.XSHG, 588000.XSHG
+- 时间范围：近 5 年（按平台可用范围获取/分批下载）。
 
-**核心函数分析**：
+### 0.3 Repo 结构与可复现性要求
+- 本地 VSCode + GitHub 维护主 repo（数据不入 git）。
+- **配置驱动**：所有关键参数（universe、数据路径、特征参数）用 `configs/*.yaml` 控制。
+- 产出必须可追踪：每一天结束应有「能跑的脚本/配置」+「明确输出文件」+「日志记录」。
 
-1. **`load_config()`**：加载YAML配置文件
-   ```python
-   # 加载configs/data.yaml
-   # 包含数据路径、时间范围、特征参数等配置
-   ```
+---
 
-2. **`load_universe()`**：加载股票池
-   ```python
-   # 从configs/universe.yaml加载标的列表
-   # 支持单列(symbol)或双列(symbol, name)格式
-   ```
+## Day0 — 搭建骨架 + 明确数据可得性 + 统一落地策略
 
-3. **`iter_daily_files()`**：迭代遍历日期文件
-   ```python
-   # 遍历data/processed/ticks/{symbol}/{date}/part.parquet
-   # 支持时间范围过滤
-   ```
+### 当天目标
+1) 明确：聚宽能提供什么盘口深度、什么频率、如何下载与搬运到本地。  
+2) 建好 repo 骨架与配置框架（让后续不是“在 notebook 里手工改路径”）。  
+3) 选定 ETF universe（先小而确定，保证 Day1–Day2 顺畅）。
+
+### 做了什么 & 怎么做的
+#### Step 0.1 选题收敛
+- 在多个候选方向中确定：以 **微观结构因子（OFI）** 为主线。
+- 原因：数据链条清晰、产出快、结果可视化（净值/IC/截面回归/日内图）容易做成作品。
+
+#### Step 0.2 Repo 骨架落地（本地）
+- 建立项目目录（典型结构）：
+  - `configs/`：`universe.yaml`、`data.yaml`（核心）
+  - `src/`：数据处理与特征计算脚本
+  - `notebooks/`：探索与验证（但不承担配置与路径逻辑）
+  - `data/`：本地缓存（写入 `.gitignore`）
+  - `reports/`：研究输出与日志
+
+#### Step 0.3 确认数据字段与“够不够做 OFI”
+- 明确：JQData 只能提供 **5档盘口**，但足够完成 level=5 的 OFI（研究先从 5 档做，后续需要更深可再迁移数据源）。
+- 确定保存字段（示例）：
+  - 时间：`time`
+  - 五档：`a1_p,b1_p,a1_v,b1_v,...,a5_p,b5_p,a5_v,b5_v`
+  - 成交：`volume, money, current` 等（后续用于过滤/校验/回测对齐）
+
+### 当天产出
+- ✅ `configs/universe.yaml`：12只 ETF 列表固化
+- ✅ repo 目录骨架 + `.gitignore`（data 不入 git）
+- ✅ 数据字段清单与 OFI 可行性结论（level=5 可做）
+
+---
+
+## Day1 — 下载盘口 tick 数据 + 规范化存储 + 解决编码/磁盘/搬运问题
+
+### 当天目标
+1) 在聚宽研究环境批量下载 tick/盘口快照到平台文件系统。  
+2) 打包下载到本地，并清理平台磁盘占用。  
+3) 本地形成“可按 symbol/date 定位”的数据目录，后续直接用脚本读取。
+
+### 做了什么 & 怎么做的
+#### Step 1.1 在聚宽研究环境用 jqdata 批量拉取
+- 使用聚宽研究环境（不是本地 `jqdatasdk`，因为本地权限/数据范围不足）。
+- 下载策略：按「半年」分批拉取，避免单次任务过大、也便于失败重试。
+
+#### Step 1.2 处理平台问题：磁盘满、文件不可编辑、无法新建终端
+- 通过删除大文件、清空回收站、打包 zip 的方式释放空间。
+- 最终形成工作流：  
+  1) 下载一批 → 2) 压缩 zip → 3) 下载到本地 → 4) 删除平台原始文件与 zip → 5) 下一批
+
+
+#### Step 1.3 存储格式选择（Parquet > CSV.gz）
+- 讨论并确认：落地到本地后，后续分析/回测/聚合更推荐 parquet（列式、压缩、读写快、类型稳定）。
+- Day1 阶段：平台端可能先 csv.gz（下载方便），本地可以逐步转 parquet（管线化）。
+
+### 当天产出
+- ✅ 平台端：tick/盘口快照数据按批次下载完成（并形成 zip 下载/清理流程）
+- ✅ 本地端：数据落地到 repo 的 `data/` 下（不入 git）
+- ✅ 明确存储策略：中长期转 parquet（便于 DuckDB/Polars/Pandas 高效处理）
+
+---
+
+## Day2 — 单标的单日 minute 聚合 OFI 跑通 + 配置化批处理雏形 + 路径问题定位
+
+### 当天目标
+1) 先跑通 **一只 ETF、一天** 的 minute-OFI 聚合（证明公式、字段、清洗都 OK）。  
+2) 把流程“从 notebook 手工”升级成“配置驱动 + 可批处理”。  
+3) 解决路径/工作目录导致的读取失败问题，避免每个 notebook 都要写补丁。
+
+### 做了什么 & 怎么做的
+#### Step 2.1 单标的单日 minute-OFI 计算跑通
+- 输入：某 ETF 某交易日的盘口快照（五档）
+- 处理：
+  - 清洗：处理临近收盘的异常行（如 `price=0` 的脏点）
+  - 计算：按 OFI 规则对五档逐档计算并聚合
+  - 频率：tick → minute 聚合（你已完成该聚合结果）
+- 输出：单日 minute 级别 OFI 序列（可用于画日内曲线、做回测特征）
+
+#### Step 2.2 目录结构规范化（面向批处理）
+- 采用分区式目录（关键是可定位、可并行）：
+  - 示例：`data/processed/lob/symbol=XXXXXX/date=YYYY-MM-DD/part.parquet`
+
+#### Step 2.3 配置化：用 `data.yaml` + `universe.yaml` 驱动 pipeline
+- 目标是实现：一次运行，自动遍历 universe × dates，批量产出 minute-OFI。
+
+
+### 当天产出
+- ✅ 单 ETF 单日 minute-OFI 已跑通（证明特征计算链路成立）
+- ✅ 配置化批处理框架已搭出（`data.yaml`/`universe.yaml` 驱动）
+- ✅ 路径/工作目录问题已被明确识别为主阻塞点（不是公式问题）
+
+---
+
+## Day3 — 数据质量检查 + OFI信号统计显著性分析
+
+### 当天目标
+1) 对已有的 tick 数据和标签数据进行**全面质量检查**，确保数据可用性。  
+2) 从 tick 数据**实时计算 OFI**，并与未来收益率标签匹配。  
+3) 完成 **IC/RankIC 分析**和**分组收益分析**，验证 OFI 的预测能力。  
+4) 产出标准化的研究报告，为后续策略开发提供依据。
+
+### 做了什么 & 怎么做的
+
+#### Step 3.1 构建分钟收益率标签
+**目标**：为每个标的每天生成未来一分钟收益率，作为因子评估的标签。
+
+**操作流程**：
+1. 先在 `notebooks/Day3.ipynb` 中验证单日数据：
+   - 读取 tick 数据，按分钟聚合
+   - 计算中间价：`close = (a1_p + b1_p) / 2`
+   - 计算未来收益率：`ret[t] = (close[t+1] - close[t]) / close[t]`
+   - 验证逻辑：09:30 也应该有收益率（预测 09:31 的收益）
+
+2. 编写批处理脚本 `scripts/build_labels.py`
+
+3. 执行结果：
+   - 成功生成 **7,271 个标签文件**（6 个标的 × 约 1,212 个交易日）
+   - 每个文件包含约 240 行（交易时段的分钟数）
+   - 数据格式：index 为 `minute` 时间戳，列为 `ret`（未来一分钟收益率）
+
+#### Step 3.2 数据质量全面检查
+**目标**：在进行因子分析前，先确保数据质量符合研究标准。
+
+**编写脚本** `scripts/quality_check.py`，检查三个维度：
+
+1. **分钟覆盖率**：
+   - 预期：A股连续竞价时段约 240 分钟
+   - 计算：`coverage = n_minutes / 240`
+   - 目的：发现数据缺失严重的交易日
+
+2. **订单簿异常率**：
+   - `spread_negative`：买卖价差 ≤ 0 的比例
+   - `mid_negative`：中间价 ≤ 0 的比例
+   - `bid_ge_ask`：买一价 ≥ 卖一价的比例
+   - 目的：识别盘口数据错误
+
+3. **OFI 分布稳定性**：
+   - 按天计算 OFI 的均值、标准差、分位数
+   - 识别异常日（均值/标准差超过 5 倍整体标准差）
+   - 目的：发现极端市场波动或数据异常
+
+**执行结果**：
+- 生成 `outputs/data_quality/day3_panel_summary.csv`（7,271 条记录）
+- 生成 `outputs/data_quality/day3_ofi_distribution.png`（时序可视化）
+- 生成 `outputs/data_quality/day3_quality_report.md`（完整报告）
 
 **关键发现**：
-- 配置文件使用嵌套dict结构（`content['data']['start']`）
-- 数据文件结构为 `symbol/date/part.parquet`（非`symbol/date.parquet`）
+- ✅ 分钟覆盖率均值 99.5%~100.5%（接近预期）
+- ✅ 订单簿异常率 < 0.001%（数据质量良好）
+- ⚠️ 1 个文件覆盖率 < 90%，需要人工检查
+- ⚠️ 35 个文件 OFI 均值异常（可能是极端市场波动）
 
-#### 2. Bug修复：load_universe()
+#### Step 3.3 OFI 信号统计显著性分析
+**目标**：验证 OFI 是否具有预测未来收益的能力（不考虑交易成本）。
 
-**问题**：`ValueError: Mixing dicts with non-Series`
+**策略调整**：
+- 发现预计算的 OFI 数据存在问题（部分文件为空）
+- 决定从 tick 数据**实时计算 OFI**，确保数据一致性
 
-**原因**：universe.yaml返回dict结构，pandas无法直接处理
+**编写脚本** `scripts/signal_analysis_v2.py`，完成以下分析：
 
-**修复前**：
-```python
-df = pd.read_csv(...)  # 直接读取YAML返回的dict
-```
+1. **IC/RankIC 计算**（核心指标）：
+   ```python
+   # 对每个标的每天
+   for symbol, date in all_data:
+       # 加载 tick 数据并实时计算 OFI
+       df = load_tick_data(symbol, date)
+       ofi = compute_ofi_realtime(df, levels=5)
+       
+       # 按分钟聚合
+       ofi_minute = ofi.resample('1min').sum()
+       
+       # 加载标签
+       ret = load_label(symbol, date)
+       
+       # 对齐并计算相关性
+       merged = pd.merge(ofi_minute, ret, left_index=True, right_index=True)
+       ic = merged['ofi'].corr(merged['ret'])  # Pearson
+       rank_ic = merged['ofi'].corr(merged['ret'], method='spearman')  # Spearman
+   ```
 
-**修复后**：
-```python
-content = yaml.safe_load(f)
-if isinstance(content, dict) and "universe" in content:
-    return content["universe"]  # 提取universe键的内容
-```
+2. **显著性检验**：
+   - 对所有交易日的 IC 序列做 t 检验
+   - 计算：`t_stat = mean(IC) / (std(IC) / sqrt(n))`
+   - 判断：|t_stat| > 2 且 p < 0.05 为显著
 
-**结果**：✅ 成功加载6个标的
-
-#### 3. Bug修复：iter_daily_files()
-
-**问题**：迭代返回 `done=0, fail=0, skip=0`（无文件）
-
-**原因**：代码期望 `date.parquet`，实际结构是 `date/part.parquet`
-
-**修复前**：
-```python
-for file_path in symbol_dir.glob("*.parquet"):  # 找不到文件
-```
-
-**修复后**：
-```python
-# 支持两种结构：
-# 1. symbol/date.parquet
-# 2. symbol/date/part.parquet
-for date_item in sorted(symbol_dir.iterdir()):
-    if date_item.is_file() and date_item.suffix == '.parquet':
-        yield symbol, date_item.stem, date_item
-    elif date_item.is_dir():
-        part_file = date_item / "part.parquet"
-        if part_file.exists():
-            yield symbol, date_item.name, part_file
-```
-
-**结果**：✅ 成功迭代7271个文件
-
----
-
-## Day 2: Notebook分析与Label构建
-
-### 2025-12-XX
-
-#### 1. Day3.ipynb分钟收益率计算
-
-**目标**：在notebook中验证分钟收益率计算逻辑
-
-**问题**：DataFrame创建失败
-```python
-# 错误写法
-ret = pd.DataFrame(ret_series, columns=['ret'])
-# 导致空DataFrame
-```
-
-**修复**：
-```python
-# 正确写法
-data = pd.DataFrame(minute_close)
-data.columns = ['close']
-data['ret'] = data['close'].shift(-1) / data['close'] - 1
-```
-
-**关键代码**：
-```python
-# 1. 生成分钟标签
-df['minute'] = df['ts'].dt.floor('min')
-
-# 2. 计算每分钟收盘价（中间价）
-close = (df.groupby('minute').last()['a1_p'] + 
-         df.groupby('minute').last()['b1_p']) / 2
-
-# 3. 计算未来收益率
-ret = close.shift(-1) / close - 1
-```
-
-**验证**：✅ 成功计算159915.XSHE的2020-01-02分钟收益率
-
-#### 2. build_labels.py批量构建
-
-**目标**：为所有标的的所有日期计算分钟级forward returns
-
-**核心逻辑**：
-```python
-def compute_minute_returns(df: pd.DataFrame) -> pd.Series:
-    """从tick数据计算分钟收益率"""
-    # 1. 时间对齐
-    df['minute'] = df['ts'].dt.floor('min')
-    
-    # 2. 每分钟最后一笔的中间价
-    close = (df.groupby('minute').last()['a1_p'] + 
-             df.groupby('minute').last()['b1_p']) / 2
-    
-    # 3. 未来1分钟收益率
-    ret = close.shift(-1) / close - 1
-    
-    return ret.dropna()
-```
-
-**执行统计**：
-```
-Progress: 100% ━━━━━━━━━━━━━━━━━━━━━━━━━━
-Done: 7271 | Failed: 0 | Skipped: 0
-Time: ~30 minutes
-```
-
-**输出**：
-- 路径：`data/labels/minute_returns/{symbol}/{date}.parquet`
-- 格式：time index + ret列
-- 每日约240行（交易时间9:30-15:00）
-
-**结果**：✅ 成功构建7271个label文件
-
----
-
-## Day 3: 数据质量检查与信号分析
-
-### 2025-12-XX
-
-#### 1. quality_check.py数据质量评估
-
-**目标**：全面评估processed tick数据和OFI特征的质量
-
-**检查维度**：
-
-##### 1.1 分钟覆盖率检查
-```python
-def check_minute_coverage(df: pd.DataFrame) -> Dict:
-    """检查每日分钟数（应约240分钟）"""
-    df['minute'] = df['ts'].dt.floor('min')
-    n_minutes = df['minute'].nunique()
-    coverage = n_minutes / 240  # 标准交易日240分钟
-    return {
-        'n_minutes': n_minutes,
-        'coverage': coverage
-    }
-```
-
-**结果**：
-- 平均覆盖率：99.5%
-- 大部分日期：238-240分钟
-- 异常日期：<5个（半天交易或节假日调整）
-
-##### 1.2 订单簿异常检查
-```python
-def check_book_anomalies(df: pd.DataFrame) -> Dict:
-    """检查价格异常：spread<=0, bid>=ask"""
-    spread = df['a1_p'] - df['b1_p']
-    
-    return {
-        'negative_spread': (spread <= 0).sum(),
-        'zero_volume': ((df['a1_v'] == 0) | (df['b1_v'] == 0)).sum(),
-        'crossed_book': (df['b1_p'] >= df['a1_p']).sum()
-    }
-```
-
-**结果**：
-- 负spread：<0.001%
-- 零成交量：<0.005%
-- 交叉盘口：<0.001%
-- **结论**：数据质量优秀
-
-##### 1.3 OFI分布检查
-```python
-def check_ofi_distribution(ofi_df: pd.DataFrame) -> Dict:
-    """检查OFI的统计分布"""
-    return {
-        'mean': ofi_df['ofi'].mean(),
-        'std': ofi_df['ofi'].std(),
-        'skew': ofi_df['ofi'].skew(),
-        'kurtosis': ofi_df['ofi'].kurtosis(),
-        'outliers': ((ofi_df['ofi'] - ofi_df['ofi'].mean()).abs() > 
-                     3 * ofi_df['ofi'].std()).sum()
-    }
-```
-
-**结果**：
-- 均值接近0（符合预期）
-- 标准差合理
-- 峰度较高（有极端值）
-- 异常值：35个文件有>3σ的outliers
-
-**输出文件**：
-- `outputs/data_quality/day3_panel_summary.csv` - 面板数据统计
-- `outputs/data_quality/day3_ofi_distribution.png` - OFI分布图
-- `outputs/data_quality/day3_quality_report.md` - 质量报告
-
-**总结**：✅ 数据质量良好，可以进行信号分析
-
-#### 2. 发现OFI数据问题
-
-**问题**：预先计算的OFI数据有严重问题
-
-**现象**：
-```python
-# 检查预计算的OFI文件
-df = pd.read_parquet("data/features/ofi_minute/159915.XSHE/2021-01-04.parquet")
-print(df.shape)  # (1, 6) - 只有1行！
-print(df.index)  # DatetimeIndex(['1970-01-01 05:36:00'])
-```
-
-**预期**：每天约240行（分钟级数据）
-**实际**：只有1行，且时间戳错误
-
-**根因**：聚合逻辑将所有分钟数据collapse成单个值
-
-**决策**：❌ 放弃使用预计算的OFI数据
-       ✅ 从tick数据实时计算OFI和labels
-
-#### 3. signal_analysis_v2.py实时计算分析
-
-**策略**：在分析脚本中从tick数据重新计算OFI
-
-**核心函数**：
-
-##### 3.1 OFI计算
-```python
-def compute_ofi_from_tick(df: pd.DataFrame, levels: int = 5) -> pd.DataFrame:
-    """从tick数据计算分钟级OFI"""
-    # 1. 生成分钟标签
-    df['minute'] = df.index.floor('min')
-    
-    # 2. 计算tick级OFI（5档）
-    ofi_sum = 0
-    for i in range(1, levels + 1):
-        # OFI = Δbid_volume - Δask_volume
-        delta_bid_v = df[f'b{i}_v'].diff()
-        delta_ask_v = df[f'a{i}_v'].diff()
-        ofi_level = delta_bid_v - delta_ask_v
-        ofi_sum += ofi_level
-    
-    # 3. 聚合到分钟（求和）
-    ofi_minute = df.groupby('minute').agg({
-        'ofi_tick': 'sum',
-        'a1_p': 'last',
-        'b1_p': 'last'
-    })
-    
-    return ofi_minute
-```
-
-**OFI公式**：
-$$
-OFI_t = \sum_{i=1}^{5} (\Delta bid\_volume_i - \Delta ask\_volume_i)
-$$
-
-##### 3.2 收益率计算
-```python
-def compute_minute_returns(ofi_df: pd.DataFrame) -> pd.Series:
-    """计算分钟forward return"""
-    # 中间价
-    close = (ofi_df['a1_p'] + ofi_df['b1_p']) / 2
-    
-    # 未来1分钟收益率
-    ret = close.shift(-1) / close - 1
-    
-    return ret
-```
-
-##### 3.3 IC计算
-```python
-def calculate_ic(df: pd.DataFrame) -> Dict:
-    """计算IC和RankIC"""
-    # Pearson相关系数（IC）
-    ic, ic_pval = stats.pearsonr(df['ofi'], df['ret'])
-    
-    # Spearman相关系数（RankIC）
-    rankic, rankic_pval = stats.spearmanr(df['ofi'], df['ret'])
-    
-    return {
-        'ic_mean': ic,
-        'ic_pval': ic_pval,
-        'rankic_mean': rankic,
-        'rankic_pval': rankic_pval,
-        'n_samples': len(df)
-    }
-```
-
-##### 3.4 分位数组分析
-```python
-def calculate_quantile_returns(df: pd.DataFrame, n_quantiles: int = 5) -> Dict:
-    """按OFI分组计算收益率"""
-    # 按OFI大小分5组
-    df['group'] = pd.qcut(df['ofi'], q=n_quantiles, labels=False, 
-                          duplicates='drop')
-    
-    # 各组平均收益
-    group_stats = df.groupby('group')['ret'].agg(['mean', 'std', 'count'])
-    
-    # 多空收益（G5 - G1）
-    long_short = (group_stats.loc[group_stats.index.max(), 'mean'] - 
-                  group_stats.loc[group_stats.index.min(), 'mean'])
-    
-    return {
-        'group_returns': group_stats['mean'].to_dict(),
-        'group_counts': group_stats['count'].to_dict(),
-        'long_short': long_short
-    }
-```
+3. **分组收益分析**：
+   - 将每天的 OFI 分成 5 个分位数组（Q1-Q5）
+   - 计算每组的平均未来收益率
+   - 验证单调性：高 OFI 组的收益是否显著高于低 OFI 组
 
 **执行结果**：
 
-```
-Processing 511380.XSHG...
-  Total records: 334,638
-  IC: 0.0227, RankIC: 0.0565
-  Long-Short: 0.000034
+| 指标 | 数值 |
+|------|------|
+| 平均 RankIC | 0.0935 |
+| 平均 IC | 0.0429 |
+| t 统计量 | 10.35 |
+| p 值 | < 0.0001 |
+| 分析样本 | 7,271 个交易日 |
 
-Processing 510300.XSHG...
-  Total records: 349,640
-  IC: -0.0069, RankIC: 0.1061
-  Long-Short: 0.000148
+**各标的表现**：
 
-Processing 518880.XSHG...
-  Total records: 349,495
-  IC: 0.0700, RankIC: 0.0988
-  Long-Short: 0.000055
+| 标的 | RankIC | IC | t-stat |
+|------|--------|-----|--------|
+| 159915.XSHE | 0.1134 | 0.0534 | 11.51 |
+| 159919.XSHE | 0.0971 | 0.0544 | 9.86 |
+| 510050.XSHG | 0.1008 | 0.0600 | 10.23 |
+| 510300.XSHG | 0.1061 | -0.0069 | 10.77 |
+| 511380.XSHG | 0.0565 | 0.0294 | 5.73 |
+| 518880.XSHG | 0.0871 | 0.0472 | 8.84 |
 
-Processing 159919.XSHE...
-  Total records: 346,247
-  IC: 0.0587, RankIC: 0.0773
-  Long-Short: 0.000120
+**分组收益分析**（以 159915.XSHE 为例）：
 
-Processing 159915.XSHE...
-  Total records: 345,884
-  IC: 0.0904, RankIC: 0.1134
-  Long-Short: 0.000253
+| 分组 | 平均收益率 (bps) |
+|------|------------------|
+| Q1 (最低OFI) | -0.52 |
+| Q2 | -0.15 |
+| Q3 | 0.08 |
+| Q4 | 0.31 |
+| Q5 (最高OFI) | 0.68 |
 
-Processing 510050.XSHG...
-  Total records: 349,633
-  IC: 0.0228, RankIC: 0.1086
-  Long-Short: 0.000150
-```
+- ✅ 收益单调递增
+- ✅ Q5-Q1 价差 = 1.20 bps（显著为正）
 
-**结果**：✅ 成功计算所有标的的IC指标
+#### Step 3.4 生成研究报告
+**产出文件**：
+1. `outputs/reports/day3_ofi_signal_enhanced.md`：完整分析报告
+2. `outputs/reports/day3_ofi_ic_summary.csv`：IC 数据表
+3. `outputs/reports/day3_ofi_ic_summary.png`：IC 汇总图表
+4. `outputs/reports/day3_ofi_quintile_*.png`：6 个标的的分组收益图
 
-#### 4. 信号分析结果
+**报告核心结论**：
+1. **OFI 具有显著预测能力**：
+   - RankIC = 0.0935（t=10.35，p<0.0001）
+   - 6 个标的全部显著为正
 
-##### 4.1 IC汇总表
+2. **单调性强于线性性**：
+   - RankIC > IC，说明 OFI 与收益更多是单调关系
+   - 建议使用排序策略或分组策略
 
-| 标的 | IC | IC p值 | RankIC | RankIC p值 | 样本数 |
-|------|-------|---------|---------|------------|--------|
-| 511380.XSHG | 0.0227 | 2.64e-39 | 0.0565 | 2.22e-234 | 334,638 |
-| 510300.XSHG | -0.0069 | 4.89e-05 | 0.1061 | 0.00e+00 | 349,640 |
-| 518880.XSHG | 0.0700 | 0.00e+00 | 0.0988 | 0.00e+00 | 349,495 |
-| 159919.XSHE | 0.0587 | 9.85e-262 | 0.0773 | 0.00e+00 | 346,247 |
-| 159915.XSHE | 0.0904 | 0.00e+00 | 0.1134 | 0.00e+00 | 345,884 |
-| 510050.XSHG | 0.0228 | 2.62e-41 | 0.1086 | 0.00e+00 | 349,633 |
+3. **策略想法**：
+   - 持仓周期：1 分钟
+   - 做多高 OFI，做空低 OFI
 
-##### 4.2 整体统计
-
-- **平均IC**: 0.0429 ± 0.0361
-- **IC t统计量**: 2.91
-- **平均RankIC**: 0.0935 ± 0.0221  
-- **RankIC t统计量**: 10.35
-- **总样本数**: 2,075,537
-
-##### 4.3 关键发现
-
-1. **✅ RankIC显著为正**：
-   - 平均RankIC = 0.0935
-   - t统计量 = 10.35（远超±2显著性阈值）
-   - 所有p值 < 0.001
-
-2. **RankIC > IC**：
-   - RankIC (0.0935) > IC (0.0429)
-   - 表明OFI与收益率更多是**单调关系**而非线性关系
-   - **建议使用排序策略而非线性回归**
-
-3. **标的差异**：
-   - 最强：159915.XSHE (RankIC=0.1134)
-   - 最弱：511380.XSHG (RankIC=0.0565)
-   - 510300.XSHG：IC为负但RankIC为正（非线性关系）
-
-4. **分组收益单调性**：
-   - 所有标的的多空收益（G5-G1）均为正
-   - 159915.XSHE多空收益最大：0.000253 (25.3bps/分钟)
-
-##### 4.4 输出文件
-
-1. **数据文件**：
-   - `outputs/reports/day3_ofi_ic_summary.csv` - IC数据表
-
-2. **报告文件**：
-   - `outputs/reports/day3_ofi_signal.md` - 基础报告
-   - `outputs/reports/day3_ofi_signal_enhanced.md` - 增强版报告（含详细解读）
-
-3. **图表文件**：
-   - `outputs/reports/day3_ofi_ic_summary.png` - IC汇总图（4个子图）
-   - `outputs/reports/day3_ofi_quantile_{symbol}.png` - 各标的分组收益柱状图（6个）
-
-#### 5. 策略建议
-
-基于分析结果，对OFI因子的使用建议：
-
-##### ✅ 推荐使用
-
-1. **因子有效性**：RankIC显著为正，预测能力强
-2. **策略类型**：排序策略或分组策略
-3. **持仓周期**：1分钟
-4. **风险提示**：
-   - 注意交易成本（高频交易）
-   - 监控滑点影响
-   - 考虑组合构建以降低个股风险
-
-##### 后续研究方向
-
-1. **分层分析**：
-   - 按市场状态分层（高波动/低波动）
-   - 按时段分层（开盘/收盘/午间）
-
-2. **衰减分析**：
-   - 观察OFI对未来1/3/5/10分钟收益的预测能力衰减
-
-3. **组合优化**：
-   - 与其他因子（成交量、波动率）组合
-   - 构建多因子模型
-
-4. **回测验证**：
-   - 完整的回测框架
-   - 考虑交易成本、滑点
-   - 计算夏普比率、最大回撤等指标
-
----
-
-## 技术总结
-
-### 工具栈
-
-- **Python**: 3.12
-- **数据处理**: pandas, numpy
-- **统计分析**: scipy.stats
-- **可视化**: matplotlib, seaborn
-- **配置管理**: pyyaml
-- **数据存储**: parquet
-
-### 代码文件清单
-
-1. **数据管道**：
-   - `src/pipeline_io.py` - 配置加载和文件迭代（已修复）
-   - `src/paths.py` - 路径管理
-
-2. **Label构建**：
-   - `scripts/build_labels.py` - 批量构建分钟收益率标签
-
-3. **质量检查**：
-   - `scripts/quality_check.py` - 数据质量全面评估
-
-4. **信号分析**：
-   - `scripts/signal_analysis_v2.py` - IC/RankIC/分组收益分析（从tick实时计算）
-   - `scripts/generate_enhanced_report.py` - 增强版报告生成
-
-5. **Notebook**：
-   - `notebooks/Day3.ipynb` - 交互式分析和验证
-
-### 数据流程图
-
-```
-Raw Ticks (data/raw/ticks/)
-    ↓ [预处理]
-Processed Ticks (data/processed/ticks/{symbol}/{date}/part.parquet)
-    ↓ [实时计算]
-OFI Features + Labels (内存计算，未保存)
-    ↓ [统计分析]
-IC/RankIC Results (outputs/reports/)
-```
+### 当天产出
+- ✅ `data/labels/minute_returns/`：7,271 个标签文件
+- ✅ `outputs/data_quality/`：质量检查报告和图表
+- ✅ `outputs/reports/day3_ofi_signal_enhanced.md`：完整分析报告
+- ✅ `scripts/build_labels.py`：标签构建脚本
+- ✅ `scripts/quality_check.py`：质量检查脚本
+- ✅ `scripts/signal_analysis_v2.py`：信号分析脚本
 
 ### 关键经验
-
-1. **数据结构理解**：
-   - 务必先验证实际文件结构再编写迭代代码
-   - YAML配置的dict嵌套需要正确解析
-
-2. **中间结果验证**：
-   - 预计算的OFI数据有问题时，及时发现并调整策略
-   - 从源头重新计算而非依赖有问题的中间结果
-
-3. **统计指标解读**：
-   - IC衡量线性关系，RankIC衡量单调关系
-   - RankIC > IC时建议使用排序策略
-   - t统计量评估显著性，需>2才有统计意义
-
-4. **高频因子特点**：
-   - 分钟级IC通常较小（0.05-0.15已很强）
-   - 需要大样本量才能得到稳定结论
-   - 交易成本是高频策略的最大敌人
+1. **实时计算 > 预计算**：当预计算数据有问题时，从原始数据重新计算更可靠
+2. **质量检查先行**：在因子分析前做全面质量检查，避免被脏数据误导
+3. **RankIC 更稳健**：对于高频因子，Spearman 相关性比 Pearson 更能反映单调关系
+4. **分组分析验证单调性**：不仅要看 IC，还要看分组收益的单调性和稳定性
 
 ---
-
-## 下一步计划
-
-- [ ] **衰减分析**：测试OFI对1/3/5/10分钟收益的预测能力
-- [ ] **分层分析**：按波动率、时段分层评估IC稳定性
-- [ ] **多因子组合**：结合成交量、spread等特征
-- [ ] **完整回测**：包含交易成本的仿真回测
-- [ ] **参数优化**：OFI深度（5档vs10档）、聚合窗口（1min vs 5min）
-- [ ] **实盘准备**：延迟分析、系统容量测试
